@@ -22,7 +22,7 @@
 	"r2_buckets": [
 		{
 			"binding": "DASHBOARD_DATA",
-			"bucket_name": "scraping-dashboard-data"
+			"bucket_name": "scrape"
 		}
 	],
 	"vars": {

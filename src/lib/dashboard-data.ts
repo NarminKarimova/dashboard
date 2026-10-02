@@ -30,6 +30,7 @@ export type MarketsRow = {
 export type BirmarketRow = {
   period: string;
   category: string;
+  subcategory: string;
   brand: string;
   seller: string;
   price: number;
@@ -342,6 +343,7 @@ export async function loadBirmarketPage(
   return loadProjectPage("birmarket", cursor, pageSize, includeMeta, loadBirmarketRows, (rows) => ({
     periods: sortedPeriods(rows.map((r) => r.period)),
     categories: [...new Set(rows.map((r) => r.category))].sort(),
+    subcategories: [...new Set(rows.map((r) => r.subcategory))].sort(),
     brands: [...new Set(rows.map((r) => r.brand))].sort(),
     sellers: [...new Set(rows.map((r) => r.seller))].sort(),
     statuses: [...new Set(rows.map((r) => r.status))].sort(),
@@ -463,6 +465,10 @@ export async function loadBirmarketRows(): Promise<BirmarketRow[]> {
   if (cached) return cached;
 
   return withInFlight(key, async () => {
+    const categoryMapFile = await readJsonFile<{
+      categories?: Record<string, { category: string; subcategory: string }>;
+    }>(backend, "birmarket/category-map.json");
+    const categoryMap = categoryMapFile?.categories ?? {};
     const manifest = await loadManifest(backend);
     const files = dedupeManifestPaths(manifest.birmarket);
     const rows: BirmarketRow[] = [];
@@ -474,6 +480,9 @@ export async function loadBirmarketRows(): Promise<BirmarketRow[]> {
       for (const row of rawRows) {
         const price = toNumber(row.price);
         if (price === null || price <= 0) continue;
+        const categoryId = String(toNumber(row.category_id) ?? "");
+        const mappedCategory = categoryMap[categoryId];
+        const subcategory = toStr(row.category) || mappedCategory?.subcategory || "Unknown";
         const basePriceRaw = toNumber(row.base_price);
         const basePrice = basePriceRaw && basePriceRaw > 0 ? basePriceRaw : price;
         const rawDiscount = toNumber(row.discount_percent);
@@ -483,7 +492,8 @@ export async function loadBirmarketRows(): Promise<BirmarketRow[]> {
 
         rows.push({
           period,
-          category: toStr(row.category) || "Unknown",
+          category: mappedCategory?.category || "Digər",
+          subcategory,
           brand: toStr(row.brand) || "Unknown",
           seller: toStr(row.seller) || "Unknown",
           price,

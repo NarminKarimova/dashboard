@@ -129,3 +129,10 @@ npm run dev          # run local development server
 npm run build        # build the Next.js app
 npm run deploy       # build and deploy app code to Cloudflare Workers
 ```
+If future scraped data introduces new category IDs, refresh the mappin first:
+npm run build-birmarket-categories
+
+
+$env:NODE_USE_SYSTEM_CA = "1"
+npm run upload-data
+npm run deploy

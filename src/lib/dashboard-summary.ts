@@ -4,7 +4,10 @@ import type { ProjectKey } from "@/lib/dashboard-data";
 export type SummaryTrendPoint = {
   period: string;
   medianPrice: number;
+  cleanedAverage: number;
   count: number;
+  retainedCount: number;
+  excludedCount: number;
 };
 
 export type SummaryBreakdownPoint = {

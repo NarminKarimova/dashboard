@@ -83,7 +83,7 @@ const ANALYSIS_TOOLS = [
             dimension: {
               type: "string",
               description:
-                "Segment dimension. Bina: region, category, rooms. Markets: source, category, brand. Birmarket: category, brand, discountBand, status, seller. Turbo: brand, fuelType, bodyType, transmission.",
+                "Segment dimension. Bina: region, category, rooms. Markets: source, category, brand. Birmarket: category, subcategory, brand, discountBand, status, seller. Turbo: brand, fuelType, bodyType, transmission.",
             },
             limit: {
               type: "number",
@@ -147,7 +147,7 @@ const ANALYSIS_TOOLS = [
             dimension: {
               type: "string",
               description:
-                "Dimension name. Bina: region, category, rooms. Markets: source, category, brand. Birmarket: category, brand, discountBand, status, seller. Turbo: brand, fuelType, bodyType, transmission.",
+                "Dimension name. Bina: region, category, rooms. Markets: source, category, brand. Birmarket: category, subcategory, brand, discountBand, status, seller. Turbo: brand, fuelType, bodyType, transmission.",
             },
             key: {
               type: "string",

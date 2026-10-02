@@ -12,9 +12,12 @@ import {
   LineChart,
   ReferenceLine,
   ResponsiveContainer,
+  Scatter,
+  ScatterChart,
   Tooltip,
   XAxis,
   YAxis,
+  ZAxis,
 } from "recharts";
 import { decodeCompactRows, type CompactRow } from "@/lib/compact-dashboard-data";
 import { MarketChat, type AnalysisContext } from "@/components/market-chat";
@@ -45,6 +48,7 @@ type MarketsRow = {
 type BirmarketRow = {
   period: string;
   category: string;
+  subcategory: string;
   brand: string;
   seller: string;
   price: number;
@@ -90,6 +94,9 @@ type TrendPoint = {
   period: string;
   dateLabel: string;
   medianPrice: number;
+  cleanedAverage: number;
+  retainedCount: number;
+  excludedCount: number;
   pctChange: number;
   pctLabel: string;
 };
@@ -106,6 +113,20 @@ type BreakdownPoint = {
   valueLabel: string;
   period?: string;
   dateLabel?: string;
+};
+
+type BirmarketCategoryProfile = {
+  category: string;
+  shortCategory: string;
+  count: number;
+  countLabel: string;
+  medianPrice: number;
+  medianDiscount: number;
+  noDiscount: number;
+  under10: number;
+  tenTo24: number;
+  twentyFiveTo49: number;
+  fiftyPlus: number;
 };
 
 type TrendDatum = TrendPoint & Record<string, string | number>;
@@ -147,6 +168,7 @@ const I18N: Record<Lang, Record<string, string>> = {
     operation: "Operation",
     regions: "Regions",
     categories: "Categories",
+    subcategories: "Subcategories",
     rooms: "Rooms",
     sources: "Sources",
     brands: "Brands",
@@ -175,6 +197,10 @@ const I18N: Record<Lang, Record<string, string>> = {
     filteredListings: "Filtered listings",
     medianPriceM2: "Median Price / m²",
     medianPrice: "Median Price (₼)",
+    cleanedAverage: "Outlier-adjusted average",
+    retained: "retained",
+    excluded: "excluded",
+    priceTrendCombined: "Price trend — median and cleaned average",
     prev: "Prev",
     latestPeriodChange: "Latest period change",
     priceTrend: "Price trend — aggregated median",
@@ -201,8 +227,16 @@ const I18N: Record<Lang, Record<string, string>> = {
     byFuelType: "By fuel type",
     byRegion: "By region",
     byCategory: "By category",
+    bySubcategory: "By subcategory",
     byBrand: "By brand",
     byDiscount: "By discount",
+    priceDiscountMatrix: "Price–discount matrix — top categories by listings",
+    assortmentByCategory: "Listing mix — top categories",
+    discountStructure: "Discount structure by category",
+    medianDiscount: "Median discount",
+    listingsLabel: "Listings",
+    noDiscountBand: "No discount",
+    under10Band: "1–9%",
     byBodyType: "By body type",
     byTransmission: "By transmission",
     groupBy: "Group by",
@@ -220,6 +254,19 @@ const I18N: Record<Lang, Record<string, string>> = {
     sampleInsight: "Sample",
   },
   az: {
+    subcategories: "Sub-kateqoriyalar",
+    bySubcategory: "Sub-kateqoriya üzrə",
+    cleanedAverage: "Təmizlənmiş orta qiymət",
+    retained: "saxlanılıb",
+    excluded: "çıxarılıb",
+    priceTrendCombined: "Qiymət trendi — median və təmizlənmiş orta",
+    priceDiscountMatrix: "Qiymət–endirim matrisi — elan sayına görə əsas kateqoriyalar",
+    assortmentByCategory: "Elan strukturu — əsas kateqoriyalar",
+    discountStructure: "Kateqoriya üzrə endirim strukturu",
+    medianDiscount: "Median endirim",
+    listingsLabel: "Elanlar",
+    noDiscountBand: "Endirimsiz",
+    under10Band: "1–9%",
     marketAnalytics: "Bazar Analitikası",
     loading: "Yüklənir…",
     rows: "sətir",
@@ -809,6 +856,94 @@ function Section({
   );
 }
 
+function quantile(sortedValues: number[], q: number): number {
+  if (!sortedValues.length) return 0;
+  const position = (sortedValues.length - 1) * q;
+  const lower = Math.floor(position);
+  const upper = Math.ceil(position);
+  if (lower === upper) return sortedValues[lower];
+  const weight = position - lower;
+  return sortedValues[lower] * (1 - weight) + sortedValues[upper] * weight;
+}
+
+function retainRobustValues(values: number[]): number[] {
+  const valid = values.filter((value) => Number.isFinite(value) && value > 0);
+  if (valid.length < 20) return valid;
+
+  if (valid.length >= 100) {
+    const logs = valid.map((value) => Math.log(value));
+    const logMedian = median(logs);
+    const deviations = logs.map((value) => Math.abs(value - logMedian));
+    const mad = median(deviations);
+    if (mad > Number.EPSILON) {
+      const retained = valid.filter((_value, index) => (
+        Math.abs((0.67448975 * (logs[index] - logMedian)) / mad) <= 3.5
+      ));
+      if (retained.length) return retained;
+    }
+  }
+
+  const sorted = [...valid].sort((a, b) => a - b);
+  const lower = quantile(sorted, 0.01);
+  const upper = quantile(sorted, 0.99);
+  const retained = valid.filter((value) => value >= lower && value <= upper);
+  return retained.length ? retained : valid;
+}
+
+function robustAdjustedMean(groups: Iterable<number[]>): {
+  cleanedAverage: number;
+  retainedCount: number;
+  excludedCount: number;
+} {
+  let retainedCount = 0;
+  let originalCount = 0;
+  let retainedSum = 0;
+
+  for (const values of groups) {
+    const valid = values.filter((value) => Number.isFinite(value) && value > 0);
+    const retained = retainRobustValues(valid);
+    originalCount += valid.length;
+    retainedCount += retained.length;
+    for (const value of retained) retainedSum += value;
+  }
+
+  return {
+    cleanedAverage: retainedCount ? retainedSum / retainedCount : 0,
+    retainedCount,
+    excludedCount: Math.max(0, originalCount - retainedCount),
+  };
+}
+
+function BirmarketMatrixTooltip({
+  active,
+  payload,
+  lang,
+  isLight,
+}: {
+  active?: boolean;
+  payload?: ReadonlyArray<{ payload?: BirmarketCategoryProfile }>;
+  lang: Lang;
+  isLight: boolean;
+}) {
+  const point = payload?.[0]?.payload;
+  if (!active || !point) return null;
+
+  return (
+    <div
+      className={`rounded-xl border px-3 py-2.5 text-xs shadow-lg ${
+        isLight
+          ? "border-slate-200 bg-white text-slate-700"
+          : "border-zinc-700 bg-zinc-900 text-zinc-200"
+      }`}
+    >
+      <p className="mb-1.5 max-w-64 font-semibold">{point.category}</p>
+      <p>{lang === "az" ? "Median qiymət" : "Median price"}: {fmtFixed(point.medianPrice, 2)} ₼</p>
+      <p>{lang === "az" ? "Median endirim" : "Median discount"}: {point.medianDiscount.toFixed(1)}%</p>
+      <p>{lang === "az" ? "Elanlar" : "Listings"}: {fmtNum(point.count)}</p>
+    </div>
+  );
+}
+
 function InsightReadout({ insights }: { insights: Insight[] }) {
   const toneClasses: Record<Insight["tone"], string> = {
     green: "bg-emerald-500",
@@ -1086,6 +1221,7 @@ export default function Home() {
   const [operationType, setOperationType] = useState<"Sale" | "Rent">("Sale");
   const [regions, setRegions] = useState<string[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
+  const [subcategories, setSubcategories] = useState<string[]>([]);
   const [rooms, setRooms] = useState<string[]>([]);
   const [brands, setBrands] = useState<string[]>([]);
   const [sources, setSources] = useState<string[]>([]);
@@ -1157,7 +1293,7 @@ export default function Home() {
     "source" | "category" | "brand"
   >("source");
   const [breakdownDimBirmarket, setBreakdownDimBirmarket] = useState<
-    "category" | "brand" | "discountBand"
+    "category" | "subcategory" | "brand" | "discountBand"
   >("category");
   const [breakdownDimTurbo, setBreakdownDimTurbo] = useState<
     "fuelType" | "bodyType" | "transmission"
@@ -1308,6 +1444,8 @@ export default function Home() {
     } else if (project === "Birmarket") {
       const mc = (meta.categories as string[]) ?? [];
       if (categories.length !== mc.length) n++;
+      const msc = (meta.subcategories as string[]) ?? [];
+      if (subcategories.length !== msc.length) n++;
       const mb = (meta.brands as string[]) ?? [];
       if (brands.length !== mb.length) n++;
       const ms = (meta.statuses as string[]) ?? [];
@@ -1357,6 +1495,7 @@ export default function Home() {
     operationType,
     regions,
     categories,
+    subcategories,
     rooms,
     sources,
     brands,
@@ -1407,6 +1546,7 @@ export default function Home() {
       setMarketsPriceRange(marketsPriceBounds);
     } else if (project === "Birmarket") {
       setCategories((meta.categories as string[]) ?? []);
+      setSubcategories((meta.subcategories as string[]) ?? []);
       setBrands((meta.brands as string[]) ?? []);
       setBirmarketStatuses((meta.statuses as string[]) ?? []);
       setBirmarketPriceRange(birmarketPriceBounds);
@@ -1481,6 +1621,7 @@ export default function Home() {
             setMarketsPriceRange(priceBounds);
           } else if (project === "Birmarket") {
             setCategories((loadedMeta.categories as string[]) ?? []);
+            setSubcategories((loadedMeta.subcategories as string[]) ?? []);
             setBrands((loadedMeta.brands as string[]) ?? []);
             setBirmarketStatuses((loadedMeta.statuses as string[]) ?? []);
             const priceBounds = loadedSummary.bounds.price ?? [0, 10_000];
@@ -1621,6 +1762,7 @@ export default function Home() {
         if (project === "Birmarket") {
           const typed = data.rows as BirmarketRow[];
           setCategories((data.meta?.categories as string[]) ?? []);
+          setSubcategories((data.meta?.subcategories as string[]) ?? []);
           setBrands((data.meta?.brands as string[]) ?? []);
           setBirmarketStatuses((data.meta?.statuses as string[]) ?? []);
           const priceBounds = numericBounds(typed.map((r) => r.price), [0, 10_000]);
@@ -1739,6 +1881,7 @@ export default function Home() {
     if (project === "Birmarket") {
       const typed = rows as BirmarketRow[];
       const categorySet = new Set(categories);
+      const subcategorySet = new Set(subcategories);
       const brandSet = new Set(brands);
       const statusSet = new Set(birmarketStatuses);
       const ratingFilterActive =
@@ -1751,6 +1894,7 @@ export default function Home() {
         return (
           periodSet.has(r.period) &&
           (categories.length === 0 || categorySet.has(r.category)) &&
+          (subcategories.length === 0 || subcategorySet.has(r.subcategory)) &&
           (brands.length === 0 || brandSet.has(r.brand)) &&
           (birmarketStatuses.length === 0 || statusSet.has(r.status)) &&
           r.price >= birmarketPriceRange[0] && r.price <= birmarketPriceRange[1] &&
@@ -1793,6 +1937,7 @@ export default function Home() {
     periods,
     operationType,
     categories,
+    subcategories,
     rooms,
     binaPriceRange,
     binaAreaRange,
@@ -1870,16 +2015,92 @@ export default function Home() {
     return base.filter((r) => selectedSet.has(r.brand));
   }, [project, baseData, regionMode, regions, minRegionAds, turboBrandMode, brands, turboMinAds]);
 
+  const birmarketCategoryCharts = useMemo(() => {
+    if (project !== "Birmarket") {
+      return {
+        matrix: [] as BirmarketCategoryProfile[],
+        assortment: [] as BirmarketCategoryProfile[],
+        discountMix: [] as BirmarketCategoryProfile[],
+      };
+    }
+
+    type CategoryBucket = {
+      prices: number[];
+      discounts: number[];
+      bands: [number, number, number, number, number];
+    };
+
+    const buckets = new Map<string, CategoryBucket>();
+    for (const row of filteredRows as BirmarketRow[]) {
+      const bucket = buckets.get(row.category) ?? {
+        prices: [],
+        discounts: [],
+        bands: [0, 0, 0, 0, 0],
+      };
+      bucket.prices.push(row.price);
+      bucket.discounts.push(row.discountPercent);
+      const bandIndex =
+        row.discountPercent <= 0
+          ? 0
+          : row.discountPercent < 10
+            ? 1
+            : row.discountPercent < 25
+              ? 2
+              : row.discountPercent < 50
+                ? 3
+                : 4;
+      bucket.bands[bandIndex] += 1;
+      buckets.set(row.category, bucket);
+    }
+
+    const totalRows = Math.max(1, filteredRows.length);
+    const profiles = [...buckets.entries()].map(([category, bucket]) => {
+      const count = bucket.prices.length;
+      const percentage = (value: number) => Number(((value / count) * 100).toFixed(2));
+      return {
+        category,
+        shortCategory: category.length > 22 ? `${category.slice(0, 21)}…` : category,
+        count,
+        countLabel: `${fmtNum(count)} · ${((count / totalRows) * 100).toFixed(1)}%`,
+        medianPrice: Number(median(bucket.prices).toFixed(2)),
+        medianDiscount: Number(median(bucket.discounts).toFixed(1)),
+        noDiscount: percentage(bucket.bands[0]),
+        under10: percentage(bucket.bands[1]),
+        tenTo24: percentage(bucket.bands[2]),
+        twentyFiveTo49: percentage(bucket.bands[3]),
+        fiftyPlus: percentage(bucket.bands[4]),
+      } satisfies BirmarketCategoryProfile;
+    });
+
+    const assortment = [...profiles].sort((a, b) => b.count - a.count);
+    return {
+      matrix: assortment.slice(0, 12),
+      assortment,
+      discountMix: [...profiles].sort(
+        (a, b) => (100 - b.noDiscount) - (100 - a.noDiscount),
+      ),
+    };
+  }, [filteredRows, project]);
+
 
   const rawTrend = useMemo(() => {
     const byPeriod = new Map<string, number[]>();
     const byPeriodAndGroup = new Map<string, Map<string, number[]>>();
+    const cleaningGroupsByPeriod = new Map<string, Map<string, number[]>>();
+    const addCleaningValue = (period: string, group: string, value: number) => {
+      const periodGroups = cleaningGroupsByPeriod.get(period) ?? new Map<string, number[]>();
+      const values = periodGroups.get(group) ?? [];
+      values.push(value);
+      periodGroups.set(group, values);
+      cleaningGroupsByPeriod.set(period, periodGroups);
+    };
 
     if (project === "Bina.az") {
       for (const r of filteredRows as BinaRow[]) {
         const metric = operationType === "Rent" ? r.price : r.pricePerM2;
         if (!byPeriod.has(r.period)) byPeriod.set(r.period, []);
         byPeriod.get(r.period)?.push(metric);
+        addCleaningValue(r.period, r.category, metric);
         
         if (splitTrend && regionMode === "custom") {
           const grp = r.region;
@@ -1892,16 +2113,19 @@ export default function Home() {
       for (const r of filteredRows as MarketsRow[]) {
         if (!byPeriod.has(r.period)) byPeriod.set(r.period, []);
         byPeriod.get(r.period)?.push(r.price);
+        addCleaningValue(r.period, `${r.source}\u0000${r.category}`, r.price);
       }
     } else if (project === "Birmarket") {
       for (const r of filteredRows as BirmarketRow[]) {
         if (!byPeriod.has(r.period)) byPeriod.set(r.period, []);
         byPeriod.get(r.period)?.push(r.price);
+        addCleaningValue(r.period, r.subcategory, r.price);
       }
     } else {
       for (const r of filteredRows as TurboRow[]) {
         if (!byPeriod.has(r.period)) byPeriod.set(r.period, []);
         byPeriod.get(r.period)?.push(r.price);
+        addCleaningValue(r.period, r.brand, r.price);
         
         if (splitTrend && turboBrandMode === "custom") {
           const grp = r.brand;
@@ -1915,10 +2139,14 @@ export default function Home() {
     const points = [...byPeriod.entries()]
       .sort(([a], [b]) => periodCompare(a, b))
       .map(([period, values]) => {
+        const adjusted = robustAdjustedMean(
+          cleaningGroupsByPeriod.get(period)?.values() ?? [],
+        );
         const base: Record<string, string | number> = {
           period,
           dateLabel: periodToLabel(period, dateLocale),
           medianPrice: median(values),
+          ...adjusted,
         };
         const grpMap = byPeriodAndGroup.get(period);
         if (grpMap) {
@@ -1953,6 +2181,9 @@ export default function Home() {
           period: point.period,
           dateLabel: periodToLabel(point.period, dateLocale),
           medianPrice: point.medianPrice,
+          cleanedAverage: point.cleanedAverage ?? point.medianPrice,
+          retainedCount: point.retainedCount ?? point.count,
+          excludedCount: point.excludedCount ?? 0,
         }));
       return withPercentChange(points, {
         noPreviousPeriod: t("noPreviousPeriod"),
@@ -2057,6 +2288,13 @@ export default function Home() {
     return {
       count: useSummaryView ? (summary?.defaultView.count ?? 0) : filteredRows.length,
       medianValue: latest?.medianPrice ?? 0,
+      cleanedAverageValue: latest?.cleanedAverage ?? 0,
+      retainedCount: latest?.retainedCount ?? 0,
+      excludedCount: latest?.excludedCount ?? 0,
+      retainedPct:
+        latest && latest.retainedCount + latest.excludedCount > 0
+          ? (latest.retainedCount / (latest.retainedCount + latest.excludedCount)) * 100
+          : 100,
       latestPct: latest?.pctChange ?? 0,
       latestLabel: latest?.dateLabel ?? "",
       history: prevs.map((p) => ({
@@ -2072,6 +2310,10 @@ export default function Home() {
             ? "red"
             : "neutral") as "green" | "red" | "neutral",
       })),
+      cleanedHistory: prevs.map((p) => ({
+        label: p.dateLabel,
+        value: fmtFixed(p.cleanedAverage, priceFractionDigits),
+      })),
     };
   }, [filteredRows, priceFractionDigits, trend, useSummaryView, summary]);
 
@@ -2083,7 +2325,7 @@ export default function Home() {
   const priceTrendDomain = useMemo(
     () => {
       const allValues = trend.flatMap((point) => {
-        const vals = [point.medianPrice];
+        const vals = [point.medianPrice, point.cleanedAverage];
         if (splitTrend) {
           for (const group of trendGroups) {
             const v = (point as TrendDatum)[group];
@@ -2160,6 +2402,7 @@ export default function Home() {
       if (project === "Birmarket") {
         const r = row as BirmarketRow;
         if (breakdownDimBirmarket === "category") return r.category;
+        if (breakdownDimBirmarket === "subcategory") return r.subcategory;
         if (breakdownDimBirmarket === "brand") return r.brand;
         return discountBandLabel(r.discountPercent);
       }
@@ -2259,6 +2502,7 @@ export default function Home() {
         : project === "Birmarket"
           ? {
               category: t("byCategory"),
+              subcategory: t("bySubcategory"),
               brand: t("byBrand"),
               discountBand: t("byDiscount"),
             }[breakdownDimBirmarket]
@@ -2357,6 +2601,7 @@ export default function Home() {
       if (project === "Birmarket") {
         const r = row as BirmarketRow;
         if (dim === "category") return r.category;
+        if (dim === "subcategory") return r.subcategory;
         if (dim === "discountBand") return discountBandLabel(r.discountPercent);
         if (dim === "status") return r.status;
         return r.brand;
@@ -2383,6 +2628,7 @@ export default function Home() {
           : project === "Birmarket"
             ? [
                 { id: "category", label: t("byCategory") },
+                { id: "subcategory", label: t("bySubcategory") },
                 { id: "brand", label: t("byBrand") },
                 { id: "discountBand", label: t("byDiscount") },
               ]
@@ -2742,6 +2988,7 @@ export default function Home() {
             ? {
                 ...commonFilters,
                 categories,
+                subcategories,
                 brands,
                 statuses: birmarketStatuses,
                 priceRange: birmarketPriceRange,
@@ -2773,6 +3020,9 @@ export default function Home() {
         filteredRows: kpis.count,
         medianLabel,
         latestMedian: kpis.medianValue,
+        latestCleanedAverage: kpis.cleanedAverageValue,
+        cleanedAverageRetainedRows: kpis.retainedCount,
+        cleanedAverageExcludedRows: kpis.excludedCount,
         latestPercentChange: kpis.latestPct,
         latestPeriod: kpis.latestLabel,
         usingSummaryView: useSummaryView,
@@ -2799,6 +3049,7 @@ export default function Home() {
     minRegionAds,
     regions,
     categories,
+    subcategories,
     rooms,
     binaPriceRange,
     binaAreaRange,
@@ -3239,6 +3490,15 @@ export default function Home() {
                     ui={checkboxUi}
                   />
                 </FilterSection>
+                <FilterSection title={t("subcategories")}>
+                  <CheckboxList
+                    label={t("subcategories")}
+                    options={(meta.subcategories as string[]) ?? []}
+                    value={subcategories}
+                    onChange={setSubcategories}
+                    ui={checkboxUi}
+                  />
+                </FilterSection>
                 <FilterSection title={t("brands")}>
                   <CheckboxList
                     label={t("brands")}
@@ -3412,7 +3672,7 @@ export default function Home() {
             </div>
           </div>
 
-          <div id="key-metrics" className="scroll-mt-36 grid gap-4 sm:grid-cols-3">
+          <div id="key-metrics" className="scroll-mt-36 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
             <KpiCard
               label={t("filteredListings")}
               value={kpis.count.toLocaleString("en-US")}
@@ -3423,6 +3683,12 @@ export default function Home() {
               value={fmtFixed(kpis.medianValue, priceFractionDigits)}
               sub={kpis.latestLabel}
               history={kpis.history}
+            />
+            <KpiCard
+              label={t("cleanedAverage")}
+              value={fmtFixed(kpis.cleanedAverageValue, priceFractionDigits)}
+              sub={`${kpis.latestLabel} · ${kpis.retainedPct.toFixed(1)}% ${t("retained")}`}
+              history={kpis.cleanedHistory}
             />
             <KpiCard
               label={t("latestPeriodChange")}
@@ -3457,7 +3723,7 @@ export default function Home() {
             <>
               <Section
                 id="market-trends"
-                title={t("priceTrend")}
+                title={t("priceTrendCombined")}
                 extra={
                   canSplitTrend && (
                     <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-zinc-600 dark:text-zinc-300">
@@ -3503,22 +3769,25 @@ export default function Home() {
                     />
                     <Tooltip
                       {...shared}
-                      formatter={(v: number | undefined, name: string | undefined) => [
-                        fmtFixed(v ?? 0, priceFractionDigits),
-                        name === "medianPrice" ? medianLabel : (name ?? ""),
-                      ]}
+                      formatter={(v: number | undefined, name: string | undefined, entry) => {
+                        const point = entry.payload as TrendPoint | undefined;
+                        const baseName = name ?? "";
+                        const detail =
+                          baseName === t("cleanedAverage") && point
+                            ? `${baseName} · ${fmtNum(point.retainedCount)} ${t("retained")}, ${fmtNum(point.excludedCount)} ${t("excluded")}`
+                            : baseName;
+                        return [fmtFixed(v ?? 0, priceFractionDigits), detail];
+                      }}
                     />
-                    {splitTrend && (
-                      <Legend
-                        wrapperStyle={{ fontSize: "11px", color: chartColors.tick, paddingTop: "10px" }}
-                        iconType="circle"
-                      />
-                    )}
+                    <Legend
+                      wrapperStyle={{ fontSize: "11px", color: chartColors.tick, paddingTop: "10px" }}
+                      iconType="circle"
+                    />
                     {(!splitTrend || trendGroups.length === 0) && (
                       <Line
                         type="monotone"
                         dataKey="medianPrice"
-                        name="medianPrice"
+                        name={medianLabel}
                         stroke="#6366f1"
                         strokeWidth={2.5}
                         label={(props: ChartLabelProps) => {
@@ -3585,6 +3854,16 @@ export default function Home() {
                         activeDot={{ r: 4 }}
                       />
                     )}
+                    <Line
+                      type="monotone"
+                      dataKey="cleanedAverage"
+                      name={t("cleanedAverage")}
+                      stroke="#f59e0b"
+                      strokeWidth={2.25}
+                      strokeDasharray="6 4"
+                      dot={{ r: 3.5, fill: "#f59e0b", strokeWidth: 0 }}
+                      activeDot={{ r: 5 }}
+                    />
                     {splitTrend && trendGroups.map((group, idx) => {
                       const colors = [
                         "#ef4444", "#f97316", "#f59e0b", "#84cc16", "#22c55e",
@@ -4023,12 +4302,14 @@ export default function Home() {
                               }),
                             )
                           : project === "Birmarket"
-                            ? (["category", "brand", "discountBand"] as const).map(
+                            ? (["category", "subcategory", "brand", "discountBand"] as const).map(
                                 (d) => ({
                                   id: d,
                                   label: t(
                                     d === "category"
                                       ? "byCategory"
+                                      : d === "subcategory"
+                                        ? "bySubcategory"
                                       : d === "brand"
                                         ? "byBrand"
                                         : "byDiscount",
@@ -4148,6 +4429,181 @@ export default function Home() {
                     </BarChart>
                   </Chart>
                 </Section>
+              )}
+
+              {project === "Birmarket" && birmarketCategoryCharts.assortment.length > 0 && (
+                <>
+                  <div className="grid gap-5 xl:grid-cols-2">
+                    <Section title={t("priceDiscountMatrix")}>
+                      <Chart height={420}>
+                        <ScatterChart margin={{ top: 28, right: 28, left: 4, bottom: 26 }}>
+                          <CartesianGrid stroke={chartColors.grid} strokeDasharray="3 3" />
+                          <XAxis
+                            type="number"
+                            dataKey="medianPrice"
+                            name={t("medianPrice")}
+                            unit=" ₼"
+                            stroke={chartColors.axis}
+                            tick={{ fill: chartColors.tick, fontSize: 10 }}
+                            axisLine={false}
+                            tickLine={false}
+                            tickFormatter={(value) => fmtFixed(Number(value), 0)}
+                            label={{
+                              value: t("medianPrice"),
+                              position: "insideBottom",
+                              offset: -14,
+                              fill: chartColors.tick,
+                              fontSize: 10,
+                            }}
+                          />
+                          <YAxis
+                            type="number"
+                            dataKey="medianDiscount"
+                            name={t("medianDiscount")}
+                            unit="%"
+                            stroke={chartColors.axis}
+                            tick={{ fill: chartColors.tick, fontSize: 10 }}
+                            axisLine={false}
+                            tickLine={false}
+                            width={48}
+                            tickFormatter={(value) => `${Number(value).toFixed(0)}%`}
+                          />
+                          <ZAxis dataKey="count" range={[90, 750]} />
+                          <Tooltip
+                            content={<BirmarketMatrixTooltip lang={lang} isLight={isLight} />}
+                          />
+                          <Scatter data={birmarketCategoryCharts.matrix}>
+                            {birmarketCategoryCharts.matrix.map((_point, index) => (
+                              <Cell
+                                key={`matrix-${index}`}
+                                fill={`hsl(${205 + index * 13}, 75%, ${isLight ? 48 : 62}%)`}
+                              />
+                            ))}
+                            <LabelList
+                              dataKey="shortCategory"
+                              position="top"
+                              fill={chartColors.tick}
+                              fontSize={9}
+                            />
+                          </Scatter>
+                        </ScatterChart>
+                      </Chart>
+                    </Section>
+
+                    <Section title={t("assortmentByCategory")}>
+                      <Chart height={420}>
+                        <BarChart
+                          data={birmarketCategoryCharts.assortment.slice(0, 12)}
+                          layout="vertical"
+                          margin={{ top: 4, right: 92, left: 4, bottom: 20 }}
+                        >
+                          <CartesianGrid
+                            stroke={chartColors.grid}
+                            strokeDasharray="3 3"
+                            horizontal={false}
+                          />
+                          <XAxis
+                            type="number"
+                            stroke={chartColors.axis}
+                            tick={{ fill: chartColors.tick, fontSize: 10 }}
+                            axisLine={false}
+                            tickLine={false}
+                            tickFormatter={(value) => fmtNum(Number(value))}
+                          />
+                          <YAxis
+                            type="category"
+                            dataKey="shortCategory"
+                            width={138}
+                            stroke={chartColors.axis}
+                            tick={{ fill: chartColors.tick, fontSize: 9 }}
+                            axisLine={false}
+                            tickLine={false}
+                          />
+                          <Tooltip
+                            {...shared}
+                            labelFormatter={(_label, payload) =>
+                              (payload?.[0]?.payload as BirmarketCategoryProfile | undefined)?.category ?? ""
+                            }
+                            formatter={(value: number | undefined) => [
+                              fmtNum(value ?? 0),
+                              t("listingsLabel"),
+                            ]}
+                          />
+                          <Bar dataKey="count" radius={[0, 4, 4, 0]} maxBarSize={22}>
+                            <LabelList
+                              dataKey="countLabel"
+                              position="right"
+                              fill={chartColors.tick}
+                              fontSize={9}
+                            />
+                            {birmarketCategoryCharts.assortment.slice(0, 12).map((_point, index) => (
+                              <Cell
+                                key={`assortment-${index}`}
+                                fill={`hsl(${220 + index * 8}, 72%, ${isLight ? 50 : 62}%)`}
+                              />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </Chart>
+                    </Section>
+                  </div>
+
+                  <Section title={t("discountStructure")}>
+                    <Chart height={Math.max(420, birmarketCategoryCharts.discountMix.length * 30)}>
+                      <BarChart
+                        data={birmarketCategoryCharts.discountMix}
+                        layout="vertical"
+                        margin={{ top: 4, right: 28, left: 8, bottom: 24 }}
+                      >
+                        <CartesianGrid
+                          stroke={chartColors.grid}
+                          strokeDasharray="3 3"
+                          horizontal={false}
+                        />
+                        <XAxis
+                          type="number"
+                          domain={[0, 100]}
+                          stroke={chartColors.axis}
+                          tick={{ fill: chartColors.tick, fontSize: 10 }}
+                          axisLine={false}
+                          tickLine={false}
+                          tickFormatter={(value) => `${value}%`}
+                        />
+                        <YAxis
+                          type="category"
+                          dataKey="shortCategory"
+                          width={155}
+                          stroke={chartColors.axis}
+                          tick={{ fill: chartColors.tick, fontSize: 9 }}
+                          axisLine={false}
+                          tickLine={false}
+                        />
+                        <Tooltip
+                          {...shared}
+                          labelFormatter={(_label, payload) =>
+                            (payload?.[0]?.payload as BirmarketCategoryProfile | undefined)?.category ?? ""
+                          }
+                          formatter={(value: number | undefined, name: string | undefined) => [
+                            `${Number(value ?? 0).toFixed(1)}%`,
+                            name ?? "",
+                          ]}
+                        />
+                        <Legend wrapperStyle={{ fontSize: 10 }} />
+                        <Bar dataKey="noDiscount" name={t("noDiscountBand")} stackId="discount" fill="#94a3b8" />
+                        <Bar dataKey="under10" name={t("under10Band")} stackId="discount" fill="#38bdf8" />
+                        <Bar dataKey="tenTo24" name="10–24%" stackId="discount" fill="#6366f1" />
+                        <Bar dataKey="twentyFiveTo49" name="25–49%" stackId="discount" fill="#a855f7" />
+                        <Bar
+                          dataKey="fiftyPlus"
+                          name="50%+"
+                          stackId="discount"
+                          fill="#ec4899"
+                          radius={[0, 4, 4, 0]}
+                        />
+                      </BarChart>
+                    </Chart>
+                  </Section>
+                </>
               )}
             </>
           )}

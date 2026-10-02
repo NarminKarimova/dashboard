@@ -60,12 +60,14 @@ export function compactRows(
 
   if (project === "Birmarket") {
     const categories = indexByValue(meta.categories);
+    const subcategories = indexByValue(meta.subcategories);
     const brands = indexByValue(meta.brands);
     const sellers = indexByValue(meta.sellers);
     const statuses = indexByValue(meta.statuses);
     return (rows as BirmarketRow[]).map((row) => [
       compactValue(periods, row.period),
       compactValue(categories, row.category),
+      compactValue(subcategories, row.subcategory),
       compactValue(brands, row.brand),
       compactValue(sellers, row.seller),
       row.price,
@@ -127,15 +129,16 @@ export function decodeCompactRows(
     return rows.map((row) => ({
       period: lookup(meta.periods, row[0]),
       category: lookup(meta.categories, row[1]),
-      brand: lookup(meta.brands, row[2]),
-      seller: lookup(meta.sellers, row[3]),
-      price: Number(row[4]),
-      basePrice: Number(row[5]),
-      discountPercent: Number(row[6]),
-      rating: row[7] == null ? null : Number(row[7]),
-      ratingCount: row[8] == null ? null : Number(row[8]),
-      sellerRating: row[9] == null ? null : Number(row[9]),
-      status: lookup(meta.statuses, row[10]) as "New" | "Existing",
+      subcategory: lookup(meta.subcategories, row[2]),
+      brand: lookup(meta.brands, row[3]),
+      seller: lookup(meta.sellers, row[4]),
+      price: Number(row[5]),
+      basePrice: Number(row[6]),
+      discountPercent: Number(row[7]),
+      rating: row[8] == null ? null : Number(row[8]),
+      ratingCount: row[9] == null ? null : Number(row[9]),
+      sellerRating: row[10] == null ? null : Number(row[10]),
+      status: lookup(meta.statuses, row[11]) as "New" | "Existing",
     }));
   }
 

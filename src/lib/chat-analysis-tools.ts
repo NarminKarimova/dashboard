@@ -169,6 +169,7 @@ function rowDimension(project: ProjectKey, row: AnyRow, dimension: string): stri
 
   if (project === "Birmarket") {
     const market = row as BirmarketRow;
+    if (dimension === "subcategory") return market.subcategory;
     if (dimension === "brand") return market.brand;
     if (dimension === "discountBand") return discountBandLabel(market.discountPercent);
     if (dimension === "status") return market.status;
@@ -261,6 +262,7 @@ function filterRows(project: ProjectKey, rows: AnyRow[], context: ToolContext): 
 
   if (project === "Birmarket") {
     const categories = new Set(stringArray(filters.categories));
+    const subcategories = new Set(stringArray(filters.subcategories));
     const brands = new Set(stringArray(filters.brands));
     const statuses = new Set(stringArray(filters.statuses));
     const priceRange = numberRange(filters.priceRange);
@@ -270,6 +272,7 @@ function filterRows(project: ProjectKey, rows: AnyRow[], context: ToolContext): 
     return (rows as BirmarketRow[]).filter((row) => (
       (!hasPeriods || periods.has(row.period)) &&
       (categories.size === 0 || categories.has(row.category)) &&
+      (subcategories.size === 0 || subcategories.has(row.subcategory)) &&
       (brands.size === 0 || brands.has(row.brand)) &&
       (statuses.size === 0 || statuses.has(row.status)) &&
       inRange(row.price, priceRange) &&
@@ -354,7 +357,7 @@ function segmentBreakdown(project: ProjectKey, rows: AnyRow[], context: ToolCont
 function dimensionsForProject(project: ProjectKey): string[] {
   if (project === "Bina.az") return ["region", "category", "rooms"];
   if (project === "Markets") return ["source", "category", "brand"];
-  if (project === "Birmarket") return ["category", "brand", "discountBand", "status", "seller"];
+  if (project === "Birmarket") return ["category", "subcategory", "brand", "discountBand", "status", "seller"];
   return ["brand", "fuelType", "bodyType", "transmission"];
 }
 
