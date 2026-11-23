@@ -99,6 +99,8 @@ type TrendPoint = {
   excludedCount: number;
   pctChange: number;
   pctLabel: string;
+  averagePctChange: number;
+  averagePctLabel: string;
 };
 
 type Insight = {
@@ -109,6 +111,7 @@ type Insight = {
 type BreakdownPoint = {
   key: string;
   medianPrice: number;
+  averagePrice: number;
   count: number;
   valueLabel: string;
   period?: string;
@@ -130,6 +133,10 @@ type BirmarketCategoryProfile = {
 };
 
 type TrendDatum = TrendPoint & Record<string, string | number>;
+
+const trendAverageKey = (group: string) => `__average__${group}`;
+const trendAverageRetainedKey = (group: string) => `__average_retained__${group}`;
+const trendAverageExcludedKey = (group: string) => `__average_excluded__${group}`;
 
 type ListingCountBasePoint = {
   period: string;
@@ -154,6 +161,7 @@ type TrendDotProps = {
   cy?: number;
   payload?: {
     pctChange?: number;
+    averagePctChange?: number;
   };
 };
 
@@ -197,10 +205,11 @@ const I18N: Record<Lang, Record<string, string>> = {
     filteredListings: "Filtered listings",
     medianPriceM2: "Median Price / m²",
     medianPrice: "Median Price (₼)",
-    cleanedAverage: "Outlier-adjusted average",
+    medianMetric: "Median price",
+    cleanedAverage: "Average price",
     retained: "retained",
     excluded: "excluded",
-    priceTrendCombined: "Price trend — median and cleaned average",
+    priceTrendCombined: "Price trend — median and average price",
     prev: "Prev",
     latestPeriodChange: "Latest period change",
     priceTrend: "Price trend — aggregated median",
@@ -221,7 +230,8 @@ const I18N: Record<Lang, Record<string, string>> = {
     noDataHint: "Adjust filters or reset to defaults.",
     lightMode: "Light",
     darkMode: "Dark",
-    breakdown: "Breakdown — median price by segment",
+    breakdownMedian: "Analysis — median price by segment",
+    breakdownAverage: "Analysis — average price by segment",
     byRooms: "By room count",
     bySource: "By source",
     byFuelType: "By fuel type",
@@ -256,10 +266,10 @@ const I18N: Record<Lang, Record<string, string>> = {
   az: {
     subcategories: "Sub-kateqoriyalar",
     bySubcategory: "Sub-kateqoriya üzrə",
-    cleanedAverage: "Təmizlənmiş orta qiymət",
+    cleanedAverage: "Orta qiymət",
     retained: "saxlanılıb",
     excluded: "çıxarılıb",
-    priceTrendCombined: "Qiymət trendi — median və təmizlənmiş orta",
+    priceTrendCombined: "Qiymət trendi — median və orta qiymət",
     priceDiscountMatrix: "Qiymət–endirim matrisi — elan sayına görə əsas kateqoriyalar",
     assortmentByCategory: "Elan strukturu — əsas kateqoriyalar",
     discountStructure: "Kateqoriya üzrə endirim strukturu",
@@ -302,6 +312,7 @@ const I18N: Record<Lang, Record<string, string>> = {
     filteredListings: "Filtrlənmiş elanlar",
     medianPriceM2: "Median Qiymət / m²",
     medianPrice: "Median Qiymət (₼)",
+    medianMetric: "Median qiymət",
     prev: "Əvvəlki",
     latestPeriodChange: "Son dövr dəyişimi",
     priceTrend: "Qiymət trendi — aqreqat median",
@@ -322,7 +333,8 @@ const I18N: Record<Lang, Record<string, string>> = {
     noDataHint: "Filtrləri dəyişin və ya standartlara qaytarın.",
     lightMode: "İşıqlı",
     darkMode: "Qaranlıq",
-    breakdown: "Analiz — median qiymət seqmentə görə",
+    breakdownMedian: "Analiz — median qiymət seqmentə görə",
+    breakdownAverage: "Analiz — orta qiymət seqmentə görə",
     byRooms: "Otaq sayına görə",
     bySource: "Mənbəyə görə",
     byFuelType: "Yanacaq növünə görə",
@@ -400,7 +412,10 @@ function clampRange(
 }
 
 function withPercentChange(
-  points: Omit<TrendPoint, "pctChange" | "pctLabel">[],
+  points: Omit<
+    TrendPoint,
+    "pctChange" | "pctLabel" | "averagePctChange" | "averagePctLabel"
+  >[],
   labels: {
     noPreviousPeriod: string;
     drop: string;
@@ -410,16 +425,28 @@ function withPercentChange(
 ): TrendPoint[] {
   if (points.length === 0) return [];
   const basePrice = points[0].medianPrice;
+  const baseAverage = points[0].cleanedAverage;
 
   return points.map((point, idx) => {
-    if (idx === 0 || !basePrice) {
-      return { ...point, pctChange: 0, pctLabel: labels.noPreviousPeriod };
-    }
-    const value = ((point.medianPrice - basePrice) / basePrice) * 100;
-    const dir =
-      value < 0 ? labels.drop : value > 0 ? labels.rise : labels.noChange;
-    const label = `${Math.abs(value).toFixed(2)}% ${dir}`;
-    return { ...point, pctChange: value, pctLabel: label };
+    const pctChange = idx === 0 || !basePrice
+      ? 0
+      : ((point.medianPrice - basePrice) / basePrice) * 100;
+    const averagePctChange = idx === 0 || !baseAverage
+      ? 0
+      : ((point.cleanedAverage - baseAverage) / baseAverage) * 100;
+    const formatLabel = (value: number) => {
+      const dir =
+        value < 0 ? labels.drop : value > 0 ? labels.rise : labels.noChange;
+      return `${Math.abs(value).toFixed(2)}% ${dir}`;
+    };
+    return {
+      ...point,
+      pctChange,
+      pctLabel: idx === 0 ? labels.noPreviousPeriod : formatLabel(pctChange),
+      averagePctChange,
+      averagePctLabel:
+        idx === 0 ? labels.noPreviousPeriod : formatLabel(averagePctChange),
+    };
   });
 }
 
@@ -1301,6 +1328,9 @@ export default function Home() {
   const [breakdownMode, setBreakdownMode] = useState<"aggregate" | "monthly">(
     "aggregate",
   );
+  const [breakdownMetric, setBreakdownMetric] = useState<"median" | "average">(
+    "median",
+  );
 
   const allRooms = useMemo(
     () => {
@@ -2151,7 +2181,11 @@ export default function Home() {
         const grpMap = byPeriodAndGroup.get(period);
         if (grpMap) {
           for (const [grp, grpVals] of grpMap.entries()) {
+            const groupAverage = robustAdjustedMean([grpVals]);
             base[grp] = median(grpVals);
+            base[trendAverageKey(grp)] = groupAverage.cleanedAverage;
+            base[trendAverageRetainedKey(grp)] = groupAverage.retainedCount;
+            base[trendAverageExcludedKey(grp)] = groupAverage.excludedCount;
           }
         }
         return base as TrendDatum;
@@ -2330,6 +2364,8 @@ export default function Home() {
           for (const group of trendGroups) {
             const v = (point as TrendDatum)[group];
             if (typeof v === "number") vals.push(v);
+            const average = (point as TrendDatum)[trendAverageKey(group)];
+            if (typeof average === "number") vals.push(average);
           }
         }
         return vals;
@@ -2362,7 +2398,7 @@ export default function Home() {
   const percentTrendDomain = useMemo(
     () =>
       buildChartDomain(
-        trend.map((point) => point.pctChange),
+        trend.flatMap((point) => [point.pctChange, point.averagePctChange]),
         {
           paddingRatio: 0.18,
           minPadding: 0.5,
@@ -2424,16 +2460,23 @@ export default function Home() {
       period?: string,
     ): BreakdownPoint => {
       const medianValue = median(values);
+      const averageValue = robustAdjustedMean([values]).cleanedAverage;
       const medianPrice =
         project === "Markets" || project === "Birmarket"
           ? Number(medianValue.toFixed(2))
           : Math.round(medianValue);
+      const averagePrice =
+        project === "Markets" || project === "Birmarket"
+          ? Number(averageValue.toFixed(2))
+          : Math.round(averageValue);
+      const selectedPrice = breakdownMetric === "median" ? medianPrice : averagePrice;
       const labelKey = period ? `${periodToLabel(period, dateLocale)}: ${key}` : key;
       return {
         key: labelKey,
         medianPrice,
+        averagePrice,
         count: values.length,
-        valueLabel: `${fmtFixed(medianPrice, priceFractionDigits)} / ${fmtNum(
+        valueLabel: `${fmtFixed(selectedPrice, priceFractionDigits)} / ${fmtNum(
           values.length,
         )}`,
         period,
@@ -2457,7 +2500,9 @@ export default function Home() {
         .sort((a, b) => {
           const periodOrder = periodCompare(a.period ?? "", b.period ?? "");
           if (periodOrder !== 0) return periodOrder;
-          return b.medianPrice - a.medianPrice;
+          return breakdownMetric === "median"
+            ? b.medianPrice - a.medianPrice
+            : b.averagePrice - a.averagePrice;
         })
         .slice(0, 60);
     }
@@ -2471,7 +2516,11 @@ export default function Home() {
     return [...map.entries()]
       .map(([key, values]) => makePoint(key, values))
       .filter((d) => d.count >= 5)
-      .sort((a, b) => b.medianPrice - a.medianPrice)
+      .sort((a, b) =>
+        breakdownMetric === "median"
+          ? b.medianPrice - a.medianPrice
+          : b.averagePrice - a.averagePrice,
+      )
       .slice(0, 20);
   }, [
     filteredRows,
@@ -2482,6 +2531,7 @@ export default function Home() {
     breakdownDimBirmarket,
     breakdownDimTurbo,
     breakdownMode,
+    breakdownMetric,
     dateLocale,
     priceFractionDigits,
   ]);
@@ -2529,14 +2579,21 @@ export default function Home() {
         project === "Markets" || project === "Birmarket"
           ? Number(point.medianPrice.toFixed(2))
           : Math.round(point.medianPrice);
+      const rawAveragePrice = point.averagePrice ?? point.medianPrice;
+      const averagePrice =
+        project === "Markets" || project === "Birmarket"
+          ? Number(rawAveragePrice.toFixed(2))
+          : Math.round(rawAveragePrice);
+      const selectedPrice = breakdownMetric === "median" ? medianPrice : averagePrice;
       const key = point.period
         ? `${periodToLabel(point.period, dateLocale)}: ${point.key}`
         : point.key;
       return {
         key,
         medianPrice,
+        averagePrice,
         count: point.count,
-        valueLabel: `${fmtFixed(medianPrice, priceFractionDigits)} / ${fmtNum(
+        valueLabel: `${fmtFixed(selectedPrice, priceFractionDigits)} / ${fmtNum(
           point.count,
         )}`,
         period: point.period,
@@ -2551,10 +2608,13 @@ export default function Home() {
     breakdownDimBirmarket,
     breakdownDimTurbo,
     breakdownMode,
+    breakdownMetric,
     dateLocale,
     priceFractionDigits,
   ]);
   const breakdownData = useSummaryView ? summaryBreakdownData : rawBreakdownData;
+  const breakdownMetricLabel =
+    breakdownMetric === "median" ? t("medianMetric") : t("cleanedAverage");
 
   const insights = useMemo<Insight[]>(() => {
     if (useSummaryView) return [];
@@ -3770,11 +3830,25 @@ export default function Home() {
                     <Tooltip
                       {...shared}
                       formatter={(v: number | undefined, name: string | undefined, entry) => {
-                        const point = entry.payload as TrendPoint | undefined;
+                        const point = entry.payload as TrendDatum | undefined;
                         const baseName = name ?? "";
+                        const averageSuffix = ` — ${t("cleanedAverage")}`;
+                        const splitAverageGroup = baseName.endsWith(averageSuffix)
+                          ? baseName.slice(0, -averageSuffix.length)
+                          : null;
+                        const retainedCount = splitAverageGroup && point
+                          ? point[trendAverageRetainedKey(splitAverageGroup)]
+                          : point?.retainedCount;
+                        const excludedCount = splitAverageGroup && point
+                          ? point[trendAverageExcludedKey(splitAverageGroup)]
+                          : point?.excludedCount;
+                        const isAverage =
+                          baseName === t("cleanedAverage") || splitAverageGroup !== null;
                         const detail =
-                          baseName === t("cleanedAverage") && point
-                            ? `${baseName} · ${fmtNum(point.retainedCount)} ${t("retained")}, ${fmtNum(point.excludedCount)} ${t("excluded")}`
+                          isAverage &&
+                          typeof retainedCount === "number" &&
+                          typeof excludedCount === "number"
+                            ? `${baseName} · ${fmtNum(retainedCount)} ${t("retained")}, ${fmtNum(excludedCount)} ${t("excluded")}`
                             : baseName;
                         return [fmtFixed(v ?? 0, priceFractionDigits), detail];
                       }}
@@ -3861,6 +3935,30 @@ export default function Home() {
                       stroke="#f59e0b"
                       strokeWidth={2.25}
                       strokeDasharray="6 4"
+                      label={(props: ChartLabelProps) => {
+                        if (
+                          typeof props.x !== "number" ||
+                          typeof props.y !== "number" ||
+                          typeof props.value !== "number"
+                        ) {
+                          return null;
+                        }
+                        const offsetY = (props.index ?? 0) % 2 === 0 ? -12 : 16;
+                        return (
+                          <text
+                            x={props.x}
+                            y={props.y + offsetY}
+                            fill="#f59e0b"
+                            fontSize={9}
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                          >
+                            {project === "Markets" || project === "Birmarket"
+                              ? fmtFixed(props.value, priceFractionDigits)
+                              : fmtNum(props.value)}
+                          </text>
+                        );
+                      }}
                       dot={{ r: 3.5, fill: "#f59e0b", strokeWidth: 0 }}
                       activeDot={{ r: 5 }}
                     />
@@ -3876,7 +3974,7 @@ export default function Home() {
                           key={group}
                           type="monotone"
                           dataKey={group}
-                          name={group}
+                          name={`${group} — ${t("medianMetric")}`}
                           stroke={color}
                           strokeWidth={2}
                           label={(props: ChartLabelProps) => {
@@ -3888,6 +3986,51 @@ export default function Home() {
                               return null;
                             }
                             const offsetY = -10 - (idx % 3) * 9;
+                            return (
+                              <text
+                                x={props.x}
+                                y={props.y + offsetY}
+                                fill={color}
+                                fontSize={9}
+                                textAnchor="middle"
+                                dominantBaseline="middle"
+                              >
+                                {project === "Markets" || project === "Birmarket"
+                                  ? fmtFixed(props.value, priceFractionDigits)
+                                  : fmtNum(props.value)}
+                              </text>
+                            );
+                          }}
+                          dot={{ r: 3, fill: color, strokeWidth: 0 }}
+                          activeDot={{ r: 5 }}
+                        />
+                      );
+                    })}
+                    {splitTrend && trendGroups.map((group, idx) => {
+                      const colors = [
+                        "#ef4444", "#f97316", "#f59e0b", "#84cc16", "#22c55e",
+                        "#10b981", "#06b6d4", "#0ea5e9", "#3b82f6", "#6366f1",
+                        "#8b5cf6", "#d946ef", "#ec4899", "#f43f5e"
+                      ];
+                      const color = colors[idx % colors.length];
+                      return (
+                        <Line
+                          key={`average-${group}`}
+                          type="monotone"
+                          dataKey={trendAverageKey(group)}
+                          name={`${group} — ${t("cleanedAverage")}`}
+                          stroke={color}
+                          strokeWidth={2}
+                          strokeDasharray="6 4"
+                          label={(props: ChartLabelProps) => {
+                            if (
+                              typeof props.x !== "number" ||
+                              typeof props.y !== "number" ||
+                              typeof props.value !== "number"
+                            ) {
+                              return null;
+                            }
+                            const offsetY = 12 + (idx % 3) * 9;
                             return (
                               <text
                                 x={props.x}
@@ -3949,13 +4092,26 @@ export default function Home() {
                       {...shared}
                       formatter={(
                         _v: unknown,
-                        _n: unknown,
+                        name: unknown,
                         entry: { payload?: TrendPoint },
-                      ) => [entry?.payload?.pctLabel ?? "", t("change")]}
+                      ) => {
+                        const isAverage = name === t("cleanedAverage");
+                        return [
+                          isAverage
+                            ? (entry?.payload?.averagePctLabel ?? "")
+                            : (entry?.payload?.pctLabel ?? ""),
+                          String(name ?? t("change")),
+                        ];
+                      }}
+                    />
+                    <Legend
+                      wrapperStyle={{ fontSize: "11px", color: chartColors.tick, paddingTop: "10px" }}
+                      iconType="circle"
                     />
                     <Line
                       type="monotone"
                       dataKey="pctChange"
+                      name={medianLabel}
                       stroke="#f97316"
                       strokeWidth={2.5}
                       label={(
@@ -3968,12 +4124,10 @@ export default function Home() {
                         ) {
                           return null;
                         }
-                        const isEven = (props.index ?? 0) % 2 === 0;
-                        const offsetY = isEven ? -12 : 16;
                         return (
                           <text
                             x={props.x}
-                            y={props.y + offsetY}
+                            y={props.y - 12}
                             fill={chartColors.tick}
                             fontSize={9}
                             textAnchor="middle"
@@ -3993,6 +4147,50 @@ export default function Home() {
                             (p.payload?.pctChange ?? 0) < 0
                               ? "#f43f5e"
                               : "#34d399"
+                          }
+                          stroke="none"
+                        />
+                      )}
+                      activeDot={{ r: 6 }}
+                    />
+                    <Line
+                      type="monotone"
+                      dataKey="averagePctChange"
+                      name={t("cleanedAverage")}
+                      stroke="#6366f1"
+                      strokeWidth={2.5}
+                      strokeDasharray="6 4"
+                      label={(props: ChartLabelProps) => {
+                        if (
+                          typeof props.x !== "number" ||
+                          typeof props.y !== "number" ||
+                          typeof props.value !== "number"
+                        ) {
+                          return null;
+                        }
+                        return (
+                          <text
+                            x={props.x}
+                            y={props.y + 16}
+                            fill={chartColors.tick}
+                            fontSize={9}
+                            textAnchor="middle"
+                            dominantBaseline="middle"
+                          >
+                            {fmtSignedPercent(props.value)}
+                          </text>
+                        );
+                      }}
+                      dot={(p: TrendDotProps) => (
+                        <circle
+                          key={`average-dot-${p.cx}`}
+                          cx={p.cx}
+                          cy={p.cy}
+                          r={4}
+                          fill={
+                            (p.payload?.averagePctChange ?? 0) < 0
+                              ? "#f43f5e"
+                              : "#6366f1"
                           }
                           stroke="none"
                         />
@@ -4264,7 +4462,13 @@ export default function Home() {
               </Section>
 
               {breakdownData.length > 0 && (
-                <Section title={`${t("breakdown")} — ${breakdownDimLabel}`}>
+                <Section
+                  title={`${t(
+                    breakdownMetric === "median"
+                      ? "breakdownMedian"
+                      : "breakdownAverage",
+                  )} — ${breakdownDimLabel}`}
+                >
                   {/* Dimension selector */}
                   <div className="mb-3 flex flex-wrap items-center gap-3">
                     <span className="text-[11px] text-zinc-400 dark:text-zinc-500">
@@ -4346,17 +4550,31 @@ export default function Home() {
                         </button>
                       ))}
                     </div>
-                    <div className="ml-auto min-w-48">
-                      <PillToggle
-                        options={[
-                          { label: t("aggregate"), value: "aggregate" },
-                          { label: t("monthly"), value: "monthly" },
-                        ]}
-                        value={breakdownMode}
-                        onChange={(value) =>
-                          setBreakdownMode(value as "aggregate" | "monthly")
-                        }
-                      />
+                    <div className="ml-auto flex flex-wrap gap-2">
+                      <div className="min-w-48">
+                        <PillToggle
+                          options={[
+                            { label: t("medianMetric"), value: "median" },
+                            { label: t("cleanedAverage"), value: "average" },
+                          ]}
+                          value={breakdownMetric}
+                          onChange={(value) =>
+                            setBreakdownMetric(value as "median" | "average")
+                          }
+                        />
+                      </div>
+                      <div className="min-w-48">
+                        <PillToggle
+                          options={[
+                            { label: t("aggregate"), value: "aggregate" },
+                            { label: t("monthly"), value: "monthly" },
+                          ]}
+                          value={breakdownMode}
+                          onChange={(value) =>
+                            setBreakdownMode(value as "aggregate" | "monthly")
+                          }
+                        />
+                      </div>
                     </div>
                   </div>
                   <Chart
@@ -4385,7 +4603,7 @@ export default function Home() {
                           fmtFixed(v, priceFractionDigits)
                         }
                         label={{
-                          value: `${medianLabel} / ${t("countLabel")}`,
+                          value: `${breakdownMetricLabel} / ${t("countLabel")}`,
                           position: "insideBottom",
                           offset: -14,
                           fill: chartColors.tick,
@@ -4405,11 +4623,11 @@ export default function Home() {
                         {...shared}
                         formatter={(v: number | undefined) => [
                           fmtFixed(v ?? 0, priceFractionDigits),
-                          medianLabel,
+                          breakdownMetricLabel,
                         ]}
                       />
                       <Bar
-                        dataKey="medianPrice"
+                        dataKey={breakdownMetric === "median" ? "medianPrice" : "averagePrice"}
                         radius={[0, 4, 4, 0]}
                         maxBarSize={28}
                       >
